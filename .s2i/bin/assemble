@@ -1,5 +1,13 @@
 #!/bin/bash
 
+function is_django_installed() {
+  python -c "import django" &>/dev/null
+}
+
+function should_collectstatic() {
+  is_django_installed && [[ -z "$DISABLE_COLLECTSTATIC" ]]
+}
+
 function virtualenv_bin() {
     # New versions of Python (>3.6) should use venv module
     # from stdlib instead of virtualenv package
@@ -54,17 +62,40 @@ if [[ ! -z "$UPGRADE_PIP_TO_LATEST" ]]; then
   fi
 fi
 
+if [[ ! -z "$ENABLE_PIPENV" ]]; then
+  if [[ ! -z "$PIN_PIPENV_VERSION" ]]; then
+    # Add == as a prefix to pipenv version, if defined
+    PIN_PIPENV_VERSION="==$PIN_PIPENV_VERSION"
+  fi
+  install_tool "pipenv" "$PIN_PIPENV_VERSION"
+  echo "---> Installing dependencies via pipenv ..."
+  if [[ -f Pipfile ]]; then
+    pipenv install --deploy
+  elif [[ -f requirements.txt ]]; then
+    pipenv install -r requirements.txt
+  fi
+  # pipenv check
+elif [[ ! -z "$ENABLE_MICROPIPENV" ]]; then
+  install_tool "micropipenv" "[toml]"
+  echo "---> Installing dependencies via micropipenv ..."
+  # micropipenv detects Pipfile.lock and requirements.txt in this order
+  micropipenv install --deploy
+elif [[ -f requirements.txt ]]; then
+  echo "---> Installing dependencies ..."
+  pip install -r requirements.txt
+fi
+
+if [[ ( -f setup.py || -f setup.cfg ) && -z "$DISABLE_SETUP_PY_PROCESSING" ]]; then
+  echo "---> Installing application (via setup.{py,cfg})..."
+  pip install .
+fi
+
 if [[ -f pyproject.toml && -z "$DISABLE_PYPROJECT_TOML_PROCESSING" ]]; then
   echo "---> Installing application (via pyproject.toml)..."
-  pip --cache-dir=/tmp/.pip install .
+  pip install .
 fi
 
-if [[ -z "$DISABLE_OTEL_INTRUMENTATION" ]]; then
-  echo "---> Installing OpenTelemetry instrumentation dependencies ..."
-  opentelemetry-bootstrap --action=install
-fi
-
-if [[ -z "$DISABLE_COLLECTSTATIC" ]]; then
+if should_collectstatic; then
   (
     echo "---> Collecting Django static files ..."
 
@@ -91,6 +122,11 @@ if [[ -z "$DISABLE_COLLECTSTATIC" ]]; then
 
     python $manage_file collectstatic --noinput
   )
+fi
+
+if [[ -z "$DISABLE_OTEL_INTRUMENTATION" ]]; then
+  echo "---> Installing OpenTelemetry instrumentation dependencies ..."
+  opentelemetry-bootstrap --action=install
 fi
 
 # set permissions for any installed artifacts
